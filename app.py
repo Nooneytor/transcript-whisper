@@ -112,8 +112,17 @@ def init_ffmpeg():
 # Verificar ffmpeg al cargar la página
 ffmpeg_available = init_ffmpeg()
 if not ffmpeg_available:
-    st.error("⚠️ FFmpeg no está disponible. La transcripción puede fallar.")
-    st.info("💡 Si estás en Streamlit Cloud, esto debería resolverse automáticamente.")
+    st.warning("⚠️ FFmpeg no está disponible. La transcripción puede fallar.")
+
+# Cache del modelo para evitar recargas
+@st.cache_resource
+def load_whisper_model(model_name):
+    """Carga el modelo de Whisper y lo mantiene en caché"""
+    try:
+        return whisper.load_model(model_name)
+    except Exception as e:
+        st.error(f"Error al cargar el modelo: {e}")
+        return None
 
 # Título principal
 st.title('🎙️ Transcriptor de Audio con Whisper')
@@ -147,6 +156,16 @@ model_info = {
 }
 st.sidebar.info(f"**{modelo}**: {model_info[modelo]}")
 
+# Advertencia de rendimiento en CPU
+st.sidebar.markdown('### ⚡ Rendimiento en CPU')
+tiempo_estimado = {
+    'tiny': '3-8 min',
+    'base': '10-25 min',
+    'small': '20-40 min'
+}
+st.sidebar.warning(f"⏱️ Tiempo estimado para audio de 200MB: **{tiempo_estimado[modelo]}**")
+st.sidebar.info("💡 **Consejo**: Usa archivos más pequeños o modelo 'tiny' para pruebas rápidas.")
+
 # Área principal
 col1, col2 = st.columns([2, 1])
 
@@ -157,12 +176,20 @@ with col1:
     archivo = st.file_uploader(
         'Selecciona un archivo de audio',
         type=['mp3', 'wav', 'm4a', 'flac', 'ogg', 'mp4', 'webm', 'mkv'],
-        help='Máximo 200MB. Formatos soportados: MP3, WAV, M4A, FLAC, OGG, MP4, WEBM'
+        help='Recomendado: < 50MB para mejor rendimiento en CPU. Máximo: 200MB'
     )
     
     if archivo:
+        tamano_mb = archivo.size / (1024*1024)
         st.success(f'✅ Archivo cargado: {archivo.name}')
-        st.info(f'📏 Tamaño: {archivo.size / (1024*1024):.1f} MB')
+        
+        # Advertencia por tamaño
+        if tamano_mb > 100:
+            st.warning(f'⚠️ Tamaño: {tamano_mb:.1f} MB - La transcripción puede tardar mucho en CPU')
+        elif tamano_mb > 50:
+            st.info(f'📏 Tamaño: {tamano_mb:.1f} MB - Tiempo de transcripción moderado')
+        else:
+            st.info(f'📏 Tamaño: {tamano_mb:.1f} MB - Tamaño óptimo para CPU')
         
         # Botón de transcripción
         if st.button('🚀 Transcribir Audio', type='primary', use_container_width=True):
@@ -182,24 +209,28 @@ with col1:
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    # Cargar modelo
+                    # Cargar modelo (cacheado)
                     status_text.text('🔄 Cargando modelo Whisper...')
-                    progress_bar.progress(20)
+                    progress_bar.progress(10)
                     
-                    with st.spinner('Cargando modelo...'):
-                        model = whisper.load_model(modelo)
+                    model = load_whisper_model(modelo)
+                    if model is None:
+                        st.error('❌ No se pudo cargar el modelo.')
+                        return
                     
-                    progress_bar.progress(40)
-                    status_text.text('🎵 Transcribiendo audio...')
+                    progress_bar.progress(30)
+                    status_text.text('🎵 Transcribiendo audio... Esto puede tardar varios minutos en CPU.')
                     
-                    # Configurar parámetros de transcripción
-                    transcribe_kwargs = {}
+                    # Configurar parámetros de transcripción optimizados para CPU
+                    transcribe_kwargs = {
+                        'fp16': False,  # Forzar FP32 en CPU
+                        'verbose': False,  # Reducir output
+                    }
                     if idioma != 'auto':
                         transcribe_kwargs['language'] = idioma
                     
-                    # Transcribir
-                    with st.spinner('Transcribiendo... esto puede tardar varios minutos'):
-                        resultado = model.transcribe(ruta_temp, **transcribe_kwargs)
+                    # Transcribir con barra de progreso
+                    resultado = model.transcribe(ruta_temp, **transcribe_kwargs)
                     
                     progress_bar.progress(100)
                     status_text.text('✅ Transcripción completada!')
