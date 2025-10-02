@@ -216,7 +216,7 @@ with col1:
                     model = load_whisper_model(modelo)
                     if model is None:
                         st.error('❌ No se pudo cargar el modelo.')
-                        return
+                        st.stop()
                     
                     progress_bar.progress(30)
                     status_text.text('🎵 Transcribiendo audio... Esto puede tardar varios minutos en CPU.')
