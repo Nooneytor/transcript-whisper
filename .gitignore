@@ -14,6 +14,16 @@ audios/*.webm
 
 # Archivos de transcripción generados
 *_transcripcion.txt
+Squirrel_*.txt
+
+# Archivos temporales y antiguos
+app_old.py
+app_new.py
+transcripcion.py
+install_ffmpeg.py
+activate_with_ffmpeg.ps1
+README_HF.md
+README_original.md
 
 # Archivos temporales
 *.tmp
