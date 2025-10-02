@@ -13,6 +13,8 @@ from io import BytesIO
 import time
 import subprocess
 import sys
+import re
+from io import StringIO
 
 def export_docx(text: str, segments=None) -> bytes:
     """
@@ -272,9 +274,32 @@ with col1:
                     log_message('Detectando idioma y segmentando...', '🔍')
                     
                     # Configurar parámetros de transcripción optimizados para CPU
+                    # Capturar el progreso de Whisper
+                    progreso_info = {'porcentaje': 0, 'ultimo_log': ''}
+                    
+                    # Redirigir stderr para capturar logs de Whisper
+                    import contextlib
+                    
+                    class ProgressCapture:
+                        def __init__(self):
+                            self.logs = []
+                            
+                        def write(self, text):
+                            if text.strip():
+                                self.logs.append(text)
+                                # Buscar porcentajes en los logs (formato: XX% o XX%)
+                                match = re.search(r'(\d+)%', text)
+                                if match:
+                                    porcentaje = int(match.group(1))
+                                    progreso_info['porcentaje'] = porcentaje
+                                    progreso_info['ultimo_log'] = text.strip()
+                        
+                        def flush(self):
+                            pass
+                    
                     transcribe_kwargs = {
                         'fp16': False,  # Forzar FP32 en CPU
-                        'verbose': False,  # Reducir output
+                        'verbose': True,  # Activar para capturar progreso
                     }
                     if idioma != 'auto':
                         transcribe_kwargs['language'] = idioma
@@ -282,12 +307,92 @@ with col1:
                     else:
                         log_message('Detección automática de idioma activada', '🌍')
                     
-                    # Transcribir
+                    # Transcribir con captura de progreso real
                     tiempo_transcripcion_inicio = time.time()
-                    progress_bar.progress(40)
                     
-                    resultado = model.transcribe(ruta_temp, **transcribe_kwargs)
+                    # Contenedores para progreso
+                    transcription_progress = st.empty()
+                    detail_progress = st.empty()
                     
+                    # Ejecutar transcripción en un thread
+                    import threading
+                    resultado_container = {'resultado': None, 'error': None, 'completado': False}
+                    progress_capture = ProgressCapture()
+                    
+                    def transcribe_thread():
+                        try:
+                            # Redirigir stderr para capturar logs de Whisper
+                            old_stderr = sys.stderr
+                            sys.stderr = progress_capture
+                            
+                            resultado_container['resultado'] = model.transcribe(ruta_temp, **transcribe_kwargs)
+                            resultado_container['completado'] = True
+                            
+                            # Restaurar stderr
+                            sys.stderr = old_stderr
+                        except Exception as e:
+                            sys.stderr = old_stderr
+                            resultado_container['error'] = str(e)
+                            resultado_container['completado'] = True
+                    
+                    # Iniciar transcripción en background
+                    log_message('Iniciando transcripción en segundo plano...', '⚙️')
+                    thread = threading.Thread(target=transcribe_thread)
+                    thread.start()
+                    
+                    # Actualizar progreso basado en logs reales de Whisper
+                    progreso_anterior = 0
+                    
+                    while not resultado_container['completado']:
+                        tiempo_transcurrido = time.time() - tiempo_transcripcion_inicio
+                        
+                        # Obtener porcentaje real de Whisper
+                        porcentaje_whisper = progreso_info['porcentaje']
+                        
+                        if porcentaje_whisper > 0:
+                            # Usar el progreso real de Whisper (mapear de 0-100% a 40-90%)
+                            progreso_real = 40 + int((porcentaje_whisper / 100) * 50)
+                            progress_bar.progress(progreso_real)
+                            
+                            transcription_progress.info(f'🎵 Transcribiendo... **{porcentaje_whisper}%** completado')
+                            
+                            # Calcular tiempo restante basado en el progreso real
+                            if porcentaje_whisper > 5:  # Evitar divisiones por números muy pequeños
+                                tiempo_por_porcentaje = tiempo_transcurrido / porcentaje_whisper
+                                tiempo_restante_seg = tiempo_por_porcentaje * (100 - porcentaje_whisper)
+                                minutos = int(tiempo_restante_seg // 60)
+                                segundos = int(tiempo_restante_seg % 60)
+                                detail_progress.success(f'⏱️ Tiempo transcurrido: {int(tiempo_transcurrido)}s | Tiempo estimado restante: **~{minutos}m {segundos}s**')
+                            else:
+                                detail_progress.info(f'⏱️ Tiempo transcurrido: {int(tiempo_transcurrido)}s | Calculando tiempo restante...')
+                            
+                            # Log del progreso
+                            if porcentaje_whisper != progreso_anterior and porcentaje_whisper % 10 == 0:
+                                log_message(f'Progreso: {porcentaje_whisper}%', '📊')
+                                progreso_anterior = porcentaje_whisper
+                        else:
+                            # Si aún no hay progreso, mostrar mensaje de inicio
+                            progreso_estimado = min(90, 40 + int(tiempo_transcurrido * 2))
+                            progress_bar.progress(progreso_estimado)
+                            transcription_progress.info(f'🎵 Inicializando transcripción...')
+                            detail_progress.info(f'⏱️ Tiempo transcurrido: {int(tiempo_transcurrido)}s')
+                        
+                        time.sleep(0.5)  # Actualizar cada medio segundo para más fluidez
+                    
+                    # Esperar a que termine el thread
+                    thread.join()
+                    
+                    # Limpiar mensajes de progreso
+                    transcription_progress.empty()
+                    detail_progress.empty()
+                    
+                    # Verificar errores
+                    if resultado_container['error']:
+                        log_message(f'Error durante transcripción: {resultado_container["error"]}', '❌')
+                        st.error(f'❌ Error durante la transcripción: {resultado_container["error"]}')
+                        st.stop()
+                    
+                    resultado = resultado_container['resultado']
                     tiempo_transcripcion = time.time() - tiempo_transcripcion_inicio
                     progress_bar.progress(90)
                     log_message(f'Transcripción completada ({tiempo_transcripcion:.1f}s = {tiempo_transcripcion/60:.1f} min)', '✅')
