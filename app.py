@@ -11,6 +11,8 @@ import whisper
 from docx import Document
 from io import BytesIO
 import time
+import subprocess
+import sys
 
 def export_docx(text: str, segments=None) -> bytes:
     """
@@ -64,6 +66,35 @@ def format_time(seconds):
     seconds = int(seconds % 60)
     return f"{minutes:02d}:{seconds:02d}"
 
+def setup_ffmpeg():
+    """Configura ffmpeg para que esté disponible en el PATH"""
+    try:
+        # Verificar si ffmpeg está disponible
+        result = subprocess.run(['ffmpeg', '-version'], 
+                             capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    
+    # Si no está disponible, intentar usar los ejecutables locales
+    try:
+        local_ffmpeg = os.path.join(os.getcwd(), 'ffmpeg', 'ffmpeg.exe')
+        if os.path.exists(local_ffmpeg):
+            # Añadir al PATH temporalmente
+            ffmpeg_dir = os.path.join(os.getcwd(), 'ffmpeg')
+            os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ['PATH']
+            
+            # Verificar que funciona
+            result = subprocess.run([local_ffmpeg, '-version'], 
+                                 capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    
+    return False
+
 # Configuración de la página
 st.set_page_config(
     page_title='Transcriptor Whisper',
@@ -71,6 +102,18 @@ st.set_page_config(
     layout='wide',
     initial_sidebar_state='expanded'
 )
+
+# Verificar y configurar ffmpeg
+@st.cache_resource
+def init_ffmpeg():
+    """Inicializa ffmpeg y retorna si está disponible"""
+    return setup_ffmpeg()
+
+# Verificar ffmpeg al cargar la página
+ffmpeg_available = init_ffmpeg()
+if not ffmpeg_available:
+    st.error("⚠️ FFmpeg no está disponible. La transcripción puede fallar.")
+    st.info("💡 Si estás en Streamlit Cloud, esto debería resolverse automáticamente.")
 
 # Título principal
 st.title('🎙️ Transcriptor de Audio con Whisper')
@@ -125,6 +168,9 @@ with col1:
         if st.button('🚀 Transcribir Audio', type='primary', use_container_width=True):
             if archivo.size > 200 * 1024 * 1024:  # 200MB
                 st.error('❌ El archivo es demasiado grande. Máximo 200MB.')
+            elif not ffmpeg_available:
+                st.error('❌ FFmpeg no está disponible. No se puede procesar el audio.')
+                st.info('💡 Intenta recargar la página o contacta al administrador.')
             else:
                 # Crear archivo temporal
                 with tempfile.NamedTemporaryFile(delete=False, suffix=f'_{archivo.name}') as tmp:
