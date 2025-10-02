@@ -145,11 +145,45 @@ with col1:
                 
                 # Actualizar progreso en tiempo real
                 tiempo_transcripcion_inicio = time.time()
-                logs_whisper = []
+                ultimo_log_count = 0
                 
                 while not resultado_container['completado']:
                     tiempo_transcurrido = time.time() - tiempo_transcripcion_inicio
                     porcentaje_whisper = progress_capture.porcentaje
+                    
+                    # Obtener logs recientes (incluso si no tienen porcentaje)
+                    logs_recientes = progress_capture.get_recent_logs(8)
+                    
+                    # Actualizar logs si hay nuevos
+                    if logs_recientes and len(logs_recientes) > ultimo_log_count:
+                        ultimo_log_count = len(logs_recientes)
+                        # Formatear logs de forma más legible
+                        formatted_logs = []
+                        for log in logs_recientes[-5:]:  # Últimos 5
+                            # Si es muy largo, truncar el texto pero mantener timestamps
+                            if len(log) > 120:
+                                # Buscar si tiene timestamp
+                                if '[' in log and ']' in log:
+                                    timestamp_end = log.find(']') + 1
+                                    timestamp = log[:timestamp_end]
+                                    text = log[timestamp_end:].strip()
+                                    formatted_logs.append(f'{timestamp} {text[:60]}...')
+                                else:
+                                    formatted_logs.append(f'• {log[:100]}...')
+                            else:
+                                formatted_logs.append(log)
+                        
+                        logs_text = '\n'.join(formatted_logs)
+                        whisper_logs_placeholder.code(logs_text, language=None)
+                    elif not logs_recientes:
+                        # Mostrar progreso estimado si no hay logs
+                        progreso_estimado = min(90, int((tiempo_transcurrido / (tiempo_est * 60)) * 100))
+                        whisper_logs_placeholder.code(
+                            f'• Procesando audio...\n'
+                            f'• Tiempo transcurrido: {int(tiempo_transcurrido)}s\n'
+                            f'• Progreso estimado: ~{progreso_estimado}%',
+                            language=None
+                        )
                     
                     if porcentaje_whisper > 0:
                         # Progreso real
@@ -170,24 +204,12 @@ with col1:
                             )
                         else:
                             detail_progress.info(f'⏱️ Transcurrido: {int(tiempo_transcurrido)}s')
-                        
-                        # Actualizar logs
-                        if progress_capture.ultimo_log and (not logs_whisper or logs_whisper[-1] != progress_capture.ultimo_log):
-                            logs_whisper.append(progress_capture.ultimo_log)
-                            if len(logs_whisper) > 10:
-                                logs_whisper.pop(0)
-                        
-                        # Mostrar logs siempre
-                        if logs_whisper:
-                            logs_text = '\n'.join([f'• {log}' for log in logs_whisper[-5:]])
-                            whisper_logs_placeholder.code(logs_text, language=None)
-                        else:
-                            whisper_logs_placeholder.code('• Esperando logs de Whisper...', language=None)
                     else:
-                        # Inicializando
-                        progress_bar.progress(30)
+                        # Inicializando - mostrar progreso estimado
+                        progreso_estimado = 30 + min(10, int(tiempo_transcurrido / 2))
+                        progress_bar.progress(progreso_estimado)
                         transcription_progress.info('🎵 Inicializando...')
-                        whisper_logs_placeholder.code('• Inicializando Whisper...', language=None)
+                        detail_progress.info(f'⏱️ Transcurrido: {int(tiempo_transcurrido)}s')
                     
                     time.sleep(0.5)
                 
