@@ -9,7 +9,7 @@ MODELOS_DISPONIBLES = {
         'tamaño': '~39 MB',
         'velocidad': 'Muy rápido',
         'precision': 'Básica',
-        'tiempo_por_mb': 0.5,  # minutos por MB
+        'factor_velocidad': 1.0,  # 1x la duración del audio en CPU
         'disponible': True
     },
     'base': {
@@ -17,7 +17,7 @@ MODELOS_DISPONIBLES = {
         'tamaño': '~74 MB',
         'velocidad': 'Rápido',
         'precision': 'Buena',
-        'tiempo_por_mb': 1.2,
+        'factor_velocidad': 2.0,  # 2x la duración del audio en CPU
         'disponible': True
     },
     'small': {
@@ -25,7 +25,7 @@ MODELOS_DISPONIBLES = {
         'tamaño': '~244 MB',
         'velocidad': 'Lento',
         'precision': 'Muy buena',
-        'tiempo_por_mb': 2.5,
+        'factor_velocidad': 4.0,  # 4x la duración del audio en CPU
         'disponible': False,  # No disponible en CPU gratuita
         'razon_deshabilitado': 'Requiere demasiados recursos para CPU gratuita'
     }

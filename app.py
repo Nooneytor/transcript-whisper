@@ -82,13 +82,6 @@ with col1:
                 st.markdown('---')
                 st.subheader('🔄 Proceso de Transcripción')
                 
-                # Calcular tiempo estimado
-                tiempo_est = calcular_tiempo_estimado(tamano_mb, modelo_real, MODELOS_DISPONIBLES)
-                
-                # Advertencias
-                st.warning('⚠️ **Importante**: No cierres esta ventana ni recargues la página.')
-                st.info(f'📊 **Modelo**: {modelo_real} | **Tamaño**: {tamano_mb:.1f} MB | **Tiempo estimado**: ~{tiempo_est:.1f} min')
-                
                 # Contenedores de progreso
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -106,8 +99,8 @@ with col1:
                     st.error('❌ No se pudo cargar el modelo.')
                     st.stop()
                 
-                progress_bar.progress(30)
-                status_text.info('🎵 Paso 2/3: Transcribiendo audio...')
+                progress_bar.progress(20)
+                status_text.info('📊 Analizando audio...')
                 
                 # Obtener duración del audio
                 duracion_audio = get_audio_duration(ruta_temp)
@@ -115,13 +108,30 @@ with col1:
                 if duracion_audio:
                     duracion_min = int(duracion_audio // 60)
                     duracion_seg = int(duracion_audio % 60)
-                    status_detail.info(f'📊 Duración del audio: {duracion_min}:{duracion_seg:02d}')
+                    
+                    # Calcular tiempo estimado basado en duración del audio
+                    tiempo_est = calcular_tiempo_estimado(duracion_audio, modelo_real, MODELOS_DISPONIBLES)
+                    
+                    # Mostrar información
+                    st.warning('⚠️ **Importante**: No cierres esta ventana ni recargues la página.')
+                    st.info(
+                        f'📊 **Audio**: {duracion_min}:{duracion_seg:02d} | '
+                        f'**Modelo**: {modelo_real} | '
+                        f'**Tamaño**: {tamano_mb:.1f} MB\n\n'
+                        f'⏱️ **Tiempo estimado**: ~{tiempo_est:.1f} min'
+                    )
                     
                     # Crear tracker de progreso
                     progress_tracker = ProgressTracker(duracion_audio)
                 else:
-                    status_detail.info('⏱️ Procesando... Esto puede tardar varios minutos.')
+                    # Fallback si no se puede obtener duración
+                    tiempo_est = calcular_tiempo_estimado(None, modelo_real, MODELOS_DISPONIBLES)
+                    st.warning('⚠️ **Importante**: No cierres esta ventana ni recargues la página.')
+                    st.info(f'📊 **Modelo**: {modelo_real} | **Tamaño**: {tamano_mb:.1f} MB | **Tiempo estimado**: ~{tiempo_est:.1f} min')
                     progress_tracker = None
+                
+                progress_bar.progress(30)
+                status_text.info('🎵 Paso 2/3: Transcribiendo audio...')
                 
                 # Configurar transcripción en background
                 resultado_container = {'resultado': None, 'error': None, 'completado': False}
