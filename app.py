@@ -12,54 +12,44 @@ import threading
 
 # Importar módulos propios
 from src.config import APP_TITLE, APP_ICON, MAX_FILE_SIZE_MB, MODELOS_DISPONIBLES
-from src.utils import format_time, setup_ffmpeg, calcular_tiempo_estimado
+from src.utils import format_time, setup_ffmpeg, calcular_tiempo_estimado, get_audio_duration
 from src.export import export_txt, export_docx
-from src.transcription import load_whisper_model, transcribe_audio, ProgressCapture
+from src.transcription import load_whisper_model, transcribe_audio, ProgressTracker
 from src.ui_components import render_sidebar, render_file_uploader, render_file_info, render_info_panel
 
 # Configuración de la página
 st.set_page_config(
     page_title='Transcriptor Whisper',
-    page_icon=APP_ICON,
+    page_icon='🎙️',
     layout='wide',
     initial_sidebar_state='expanded'
 )
 
-# Verificar y configurar ffmpeg
-@st.cache_resource
-def init_ffmpeg():
-    """Inicializa ffmpeg y retorna si está disponible"""
-    return setup_ffmpeg()
+# Verificar FFmpeg
+ffmpeg_available = setup_ffmpeg()
 
-ffmpeg_available = init_ffmpeg()
-if not ffmpeg_available:
-    st.warning("⚠️ FFmpeg no está disponible. La transcripción puede fallar.")
-
-# Título principal
-st.title(APP_TITLE)
-st.markdown('---')
-
-# Inicializar estado de sesión
+# Inicializar estado de procesamiento
 if 'procesando' not in st.session_state:
     st.session_state.procesando = False
-if 'resultado' not in st.session_state:
-    st.session_state.resultado = None
 
-# Layout principal
+# Título principal
+st.title(f'{APP_ICON} {APP_TITLE}')
+st.markdown('### Convierte audio a texto con OpenAI Whisper')
+
+# Renderizar sidebar y obtener configuración
+modelo_real, idioma, modelo_disabled = render_sidebar(st.session_state.procesando)
+
+# Área principal
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    # Renderizar sidebar y obtener configuración
-    modelo_real, idioma, modelo_disabled = render_sidebar(st.session_state.procesando)
-    
-    # Subir archivo
+    st.header('📁 Subir Archivo de Audio')
     archivo = render_file_uploader(st.session_state.procesando)
     
     if archivo:
-        # Mostrar información del archivo
-        tamano_mb = render_file_info(archivo)
+        tamano_mb = archivo.size / (1024 * 1024)
+        render_file_info(tamano_mb, modelo_real)
         
-        # Botón de transcripción
         iniciar_transcripcion = st.button(
             '🚀 Transcribir Audio',
             type='primary',
@@ -67,16 +57,15 @@ with col1:
             disabled=modelo_disabled or st.session_state.procesando
         )
         
-        if iniciar_transcripcion and not st.session_state.procesando:
-            # Validaciones
-            if archivo.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        if iniciar_transcripcion:
+            if tamano_mb > MAX_FILE_SIZE_MB:
                 st.error(f'❌ El archivo es demasiado grande. Máximo {MAX_FILE_SIZE_MB}MB.')
             elif not ffmpeg_available:
                 st.error('❌ FFmpeg no está disponible. No se puede procesar el audio.')
+                st.info('💡 Intenta recargar la página o contacta al administrador.')
             elif modelo_disabled:
                 st.error('❌ El modelo seleccionado no está disponible. Por favor, elige "tiny" o "base".')
             else:
-                # Marcar como procesando
                 st.session_state.procesando = True
                 st.rerun()
         
@@ -102,13 +91,7 @@ with col1:
                 # Contenedores de progreso
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
-                # Contenedor de logs fijo (no empty)
-                st.markdown('##### 📋 Logs de Whisper')
-                whisper_logs_placeholder = st.empty()
-                
-                transcription_progress = st.empty()
-                detail_progress = st.empty()
+                status_detail = st.empty()
                 
                 # Paso 1: Cargar modelo
                 status_text.info('🔄 Paso 1/3: Cargando modelo Whisper...')
@@ -125,14 +108,27 @@ with col1:
                 progress_bar.progress(30)
                 status_text.info('🎵 Paso 2/3: Transcribiendo audio...')
                 
-                # Configurar captura de progreso
-                progress_capture = ProgressCapture()
+                # Obtener duración del audio
+                duracion_audio = get_audio_duration(ruta_temp)
+                
+                if duracion_audio:
+                    duracion_min = int(duracion_audio // 60)
+                    duracion_seg = int(duracion_audio % 60)
+                    status_detail.info(f'📊 Duración del audio: {duracion_min}:{duracion_seg:02d}')
+                    
+                    # Crear tracker de progreso
+                    progress_tracker = ProgressTracker(duracion_audio)
+                else:
+                    status_detail.info('⏱️ Procesando... Esto puede tardar varios minutos.')
+                    progress_tracker = None
+                
+                # Configurar transcripción en background
                 resultado_container = {'resultado': None, 'error': None, 'completado': False}
                 
                 def transcribe_thread():
                     try:
                         resultado_container['resultado'] = transcribe_audio(
-                            model, ruta_temp, idioma, progress_capture
+                            model, ruta_temp, idioma, progress_tracker
                         )
                         resultado_container['completado'] = True
                     except Exception as e:
@@ -145,97 +141,122 @@ with col1:
                 
                 # Actualizar progreso en tiempo real
                 tiempo_transcripcion_inicio = time.time()
-                ultimo_log_count = 0
+                tiempo_estimado_segundos = tiempo_est * 60
                 
                 while not resultado_container['completado']:
                     tiempo_transcurrido = time.time() - tiempo_transcripcion_inicio
-                    porcentaje_whisper = progress_capture.porcentaje
                     
-                    # Obtener logs recientes (incluso si no tienen porcentaje)
-                    logs_recientes = progress_capture.get_recent_logs(8)
-                    
-                    # Actualizar logs si hay nuevos
-                    if logs_recientes and len(logs_recientes) > ultimo_log_count:
-                        ultimo_log_count = len(logs_recientes)
-                        # Formatear logs de forma más legible
-                        formatted_logs = []
-                        for log in logs_recientes[-5:]:  # Últimos 5
-                            # Si es muy largo, truncar el texto pero mantener timestamps
-                            if len(log) > 120:
-                                # Buscar si tiene timestamp
-                                if '[' in log and ']' in log:
-                                    timestamp_end = log.find(']') + 1
-                                    timestamp = log[:timestamp_end]
-                                    text = log[timestamp_end:].strip()
-                                    formatted_logs.append(f'{timestamp} {text[:60]}...')
-                                else:
-                                    formatted_logs.append(f'• {log[:100]}...')
-                            else:
-                                formatted_logs.append(log)
+                    # Usar progreso real si está disponible, sino usar estimado
+                    if progress_tracker and progress_tracker.porcentaje > 0:
+                        progreso_porcentaje = progress_tracker.porcentaje
+                        progreso_barra = 30 + int(progreso_porcentaje * 0.6)
+                        progress_bar.progress(min(progreso_barra, 90))
                         
-                        logs_text = '\n'.join(formatted_logs)
-                        whisper_logs_placeholder.code(logs_text, language=None)
-                    elif not logs_recientes:
-                        # Mostrar progreso estimado si no hay logs
-                        progreso_estimado = min(90, int((tiempo_transcurrido / (tiempo_est * 60)) * 100))
-                        whisper_logs_placeholder.code(
-                            f'• Procesando audio...\n'
-                            f'• Tiempo transcurrido: {int(tiempo_transcurrido)}s\n'
-                            f'• Progreso estimado: ~{progreso_estimado}%',
-                            language=None
+                        # Calcular tiempo restante basado en progreso real
+                        if progreso_porcentaje > 5:
+                            tiempo_por_porcentaje = tiempo_transcurrido / progreso_porcentaje
+                            tiempo_restante_est = tiempo_por_porcentaje * (100 - progreso_porcentaje)
+                        else:
+                            tiempo_restante_est = tiempo_estimado_segundos
+                        
+                        minutos_trans = int(tiempo_transcurrido // 60)
+                        segundos_trans = int(tiempo_transcurrido % 60)
+                        minutos_rest = int(tiempo_restante_est // 60)
+                        segundos_rest = int(tiempo_restante_est % 60)
+                        
+                        # Mostrar timestamp procesado
+                        timestamp_procesado = int(progress_tracker.ultimo_timestamp)
+                        min_proc = int(timestamp_procesado // 60)
+                        seg_proc = int(timestamp_procesado % 60)
+                        
+                        status_detail.success(
+                            f'🎵 Progreso: **{progreso_porcentaje}%** | '
+                            f'Procesado: {min_proc}:{seg_proc:02d} / {duracion_min}:{duracion_seg:02d}\n\n'
+                            f'⏱️ Tiempo: {minutos_trans}:{segundos_trans:02d} | '
+                            f'Restante: ~{minutos_rest}:{segundos_rest:02d}'
+                        )
+                    else:
+                        # Progreso estimado basado en tiempo
+                        progreso_porcentaje = min(95, int((tiempo_transcurrido / tiempo_estimado_segundos) * 100))
+                        progreso_barra = 30 + int(progreso_porcentaje * 0.6)
+                        progress_bar.progress(min(progreso_barra, 90))
+                        
+                        tiempo_restante = max(0, tiempo_estimado_segundos - tiempo_transcurrido)
+                        minutos_trans = int(tiempo_transcurrido // 60)
+                        segundos_trans = int(tiempo_transcurrido % 60)
+                        minutos_rest = int(tiempo_restante // 60)
+                        segundos_rest = int(tiempo_restante % 60)
+                        
+                        status_detail.info(
+                            f'⏱️ Transcurrido: {minutos_trans}:{segundos_trans:02d} | '
+                            f'Estimado restante: ~{minutos_rest}:{segundos_rest:02d}'
                         )
                     
-                    if porcentaje_whisper > 0:
-                        # Progreso real
-                        progreso_real = 30 + int((porcentaje_whisper / 100) * 60)
-                        progress_bar.progress(min(progreso_real, 90))
-                        
-                        transcription_progress.info(f'🎵 Transcribiendo... **{porcentaje_whisper}%** completado')
-                        
-                        # Calcular tiempo restante
-                        if porcentaje_whisper > 5:
-                            tiempo_por_porcentaje = tiempo_transcurrido / porcentaje_whisper
-                            tiempo_restante = tiempo_por_porcentaje * (100 - porcentaje_whisper)
-                            minutos = int(tiempo_restante // 60)
-                            segundos = int(tiempo_restante % 60)
-                            detail_progress.success(
-                                f'⏱️ Transcurrido: {int(tiempo_transcurrido)}s | '
-                                f'Restante: **~{minutos}m {segundos}s**'
-                            )
-                        else:
-                            detail_progress.info(f'⏱️ Transcurrido: {int(tiempo_transcurrido)}s')
-                    else:
-                        # Inicializando - mostrar progreso estimado
-                        progreso_estimado = 30 + min(10, int(tiempo_transcurrido / 2))
-                        progress_bar.progress(progreso_estimado)
-                        transcription_progress.info('🎵 Inicializando...')
-                        detail_progress.info(f'⏱️ Transcurrido: {int(tiempo_transcurrido)}s')
-                    
-                    time.sleep(0.5)
+                    time.sleep(1)  # Actualizar cada segundo
                 
-                # Esperar a que termine
                 thread.join()
                 
-                # Limpiar UI de progreso
-                transcription_progress.empty()
-                detail_progress.empty()
-                whisper_logs_placeholder.empty()
-                
-                # Verificar errores
+                # Verificar si hubo error
                 if resultado_container['error']:
                     st.session_state.procesando = False
-                    st.error(f'❌ Error: {resultado_container["error"]}')
+                    st.error(f'❌ Error durante la transcripción: {resultado_container["error"]}')
                     st.stop()
                 
-                # Guardar resultado
-                st.session_state.resultado = resultado_container['resultado']
-                st.session_state.procesando = False
+                resultado = resultado_container['resultado']
+                
+                # Paso 3: Preparar resultado
+                progress_bar.progress(95)
+                status_text.info('📝 Paso 3/3: Preparando resultados...')
+                
+                texto_completo = resultado.get('text', '')
+                segmentos = resultado.get('segments', [])
+                idioma_detectado = resultado.get('language', 'desconocido')
+                
+                # Generar archivos para descargar
+                txt_content = export_txt(texto_completo, segmentos)
+                docx_bytes = export_docx(texto_completo, segmentos)
                 
                 progress_bar.progress(100)
                 status_text.success('✅ ¡Transcripción completada!')
+                status_detail.empty()
                 
                 tiempo_total = time.time() - tiempo_inicio
                 st.success(f'🎉 Completado en {tiempo_total/60:.1f} minutos')
+                
+                # Mostrar resultados
+                st.markdown('---')
+                st.subheader('📄 Resultado')
+                st.info(f'**Idioma detectado**: {idioma_detectado}')
+                
+                with st.expander('📝 Ver transcripción completa', expanded=True):
+                    st.text_area(
+                        'Texto transcrito',
+                        texto_completo,
+                        height=300,
+                        label_visibility='collapsed'
+                    )
+                
+                # Botones de descarga
+                col_down1, col_down2 = st.columns(2)
+                with col_down1:
+                    st.download_button(
+                        label='📥 Descargar TXT',
+                        data=txt_content,
+                        file_name=f'transcripcion_{archivo.name}.txt',
+                        mime='text/plain',
+                        use_container_width=True
+                    )
+                with col_down2:
+                    st.download_button(
+                        label='📥 Descargar DOCX',
+                        data=docx_bytes,
+                        file_name=f'transcripcion_{archivo.name}.docx',
+                        mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        use_container_width=True
+                    )
+                
+                # Resetear estado
+                st.session_state.procesando = False
                 
             except Exception as e:
                 st.session_state.procesando = False
@@ -246,61 +267,15 @@ with col1:
                     os.unlink(ruta_temp)
                 except:
                     pass
-                st.rerun()
-    
-    # Mostrar resultados si existen
-    if st.session_state.resultado and not st.session_state.procesando:
-        resultado = st.session_state.resultado
-        st.markdown('---')
-        st.header('📝 Resultado de la Transcripción')
-        
-        # Métricas
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            st.metric('Idioma detectado', resultado.get('language', 'N/A'))
-        with col_m2:
-            st.metric('Segmentos', len(resultado.get('segments', [])))
-        with col_m3:
-            duracion = resultado.get('segments', [{}])[-1].get('end', 0) if resultado.get('segments') else 0
-            st.metric('Duración', format_time(duracion))
-        
-        # Transcripción completa
-        texto_completo = resultado['text']
-        st.text_area('Transcripción completa', texto_completo, height=300)
-        
-        # Botones de descarga
-        st.subheader('💾 Descargar Resultados')
-        col_d1, col_d2 = st.columns(2)
-        
-        with col_d1:
-            txt_content = export_txt(texto_completo, resultado.get('segments'))
-            st.download_button(
-                '📄 Descargar TXT',
-                txt_content,
-                file_name=f'transcripcion_{archivo.name.split(".")[0]}.txt',
-                mime='text/plain',
-                use_container_width=True
-            )
-        
-        with col_d2:
-            docx_content = export_docx(texto_completo, resultado.get('segments'))
-            st.download_button(
-                '📝 Descargar DOCX',
-                docx_content,
-                file_name=f'transcripcion_{archivo.name.split(".")[0]}.docx',
-                mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                use_container_width=True
-            )
-        
-        # Botón para nueva transcripción
-        if st.button('🔄 Nueva Transcripción', use_container_width=True):
-            st.session_state.resultado = None
-            st.rerun()
 
 with col2:
     render_info_panel()
 
 # Footer
 st.markdown('---')
-st.markdown('Desarrollado con ❤️ usando [Streamlit](https://streamlit.io) y [OpenAI Whisper](https://github.com/openai/whisper)')
-
+st.markdown(
+    '<div style="text-align: center; color: #666;">'
+    'Desarrollado con ❤️ usando OpenAI Whisper y Streamlit'
+    '</div>',
+    unsafe_allow_html=True
+)

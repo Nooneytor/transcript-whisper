@@ -3,77 +3,26 @@ Funciones para la transcripción de audio con Whisper.
 """
 import whisper
 import streamlit as st
-import sys
-import re
 
 
-class ProgressCapture:
-    """Captura los logs de progreso de Whisper desde stdout y stderr"""
-    def __init__(self):
-        self.logs = []
-        self.todos_los_logs = []  # Guardar TODOS los logs
+class ProgressTracker:
+    """Rastrea el progreso de la transcripción basándose en timestamps"""
+    def __init__(self, duracion_total):
+        self.duracion_total = duracion_total
+        self.ultimo_timestamp = 0
         self.porcentaje = 0
-        self.ultimo_log = ''
-        self.ultimo_timestamp = ''
-        
-    def write(self, text):
-        if text.strip():
-            text_clean = text.strip()
-            
-            # Guardar TODO
-            self.todos_los_logs.append(text_clean)
-            
-            # Detectar timestamp de Whisper [HH:MM:SS.mmm --> HH:MM:SS.mmm]
-            match_timestamp = re.search(r'\[(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})\]', text_clean)
-            
-            if match_timestamp:
-                # Es un segmento con timestamp - guardarlo siempre
-                self.ultimo_timestamp = match_timestamp.group(1)
-                self.ultimo_log = text_clean
-                self.logs.append(text_clean)
-                
-                # Estimar progreso basado en timestamps
-                # Extraer el tiempo final del segmento
-                try:
-                    end_time = match_timestamp.group(2)
-                    # Convertir a segundos
-                    h, m, s = end_time.split(':')
-                    seconds = int(h) * 3600 + int(m) * 60 + float(s)
-                    # Asumir que el audio es el tamaño aproximado y calcular %
-                    # (esto es una estimación, se refinará con el tiempo total)
-                    self.porcentaje = min(95, int(seconds / 10))  # Estimación temporal
-                except:
-                    pass
-            else:
-                # Buscar otros patrones
-                # Patrón 1: XX% o XX%|
-                match_percent = re.search(r'(\d+)%', text_clean)
-                # Patrón 2: [XX/YY] (segmentos)
-                match_segments = re.search(r'\[(\d+)/(\d+)\]', text_clean)
-                # Patrón 3: Palabras clave
-                keywords = ['Detecting language', 'Processing', 'segment', 'transcrib', 'decoding', 'loaded', 'model']
-                
-                if match_percent:
-                    self.porcentaje = int(match_percent.group(1))
-                    self.ultimo_log = text_clean
-                    self.logs.append(text_clean)
-                elif match_segments:
-                    current = int(match_segments.group(1))
-                    total = int(match_segments.group(2))
-                    self.porcentaje = int((current / total) * 100)
-                    self.ultimo_log = text_clean
-                    self.logs.append(text_clean)
-                elif any(keyword.lower() in text_clean.lower() for keyword in keywords):
-                    # Log importante
-                    self.ultimo_log = text_clean
-                    self.logs.append(text_clean)
     
-    def flush(self):
-        pass
-    
-    def get_recent_logs(self, n=5):
-        """Obtiene los últimos N logs"""
-        return self.logs[-n:] if self.logs else []
+    def update(self, segments):
+        """Actualiza el progreso basándose en los segmentos procesados"""
+        if segments and len(segments) > 0:
+            # Obtener el último segmento procesado
+            ultimo_segmento = segments[-1]
+            # El timestamp 'end' indica hasta dónde se ha procesado
+            self.ultimo_timestamp = ultimo_segmento.get('end', 0)
+            
+            # Calcular porcentaje
+            if self.duracion_total > 0:
+                self.porcentaje = min(100, int((self.ultimo_timestamp / self.duracion_total) * 100))
 
 
 @st.cache_resource
@@ -86,7 +35,7 @@ def load_whisper_model(model_name):
         return None
 
 
-def transcribe_audio(model, audio_path, language=None, progress_capture=None):
+def transcribe_audio(model, audio_path, language=None, progress_tracker=None):
     """
     Transcribe un archivo de audio usando Whisper.
     
@@ -94,39 +43,42 @@ def transcribe_audio(model, audio_path, language=None, progress_capture=None):
         model: Modelo de Whisper cargado
         audio_path (str): Ruta al archivo de audio
         language (str): Idioma (None para auto-detección)
-        progress_capture: Objeto para capturar progreso
+        progress_tracker: Objeto ProgressTracker para actualizar progreso (opcional)
     
     Returns:
         dict: Resultado de la transcripción
     """
     transcribe_kwargs = {
         'fp16': False,  # Forzar FP32 en CPU
-        'verbose': True,  # Activar para capturar progreso
+        'verbose': False,  # Desactivar verbose
     }
     
     if language and language != 'auto':
         transcribe_kwargs['language'] = language
     
-    # Redirigir STDOUT Y STDERR si se proporciona progress_capture
-    if progress_capture:
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
+    # Si hay progress_tracker, hacemos transcripción iterativa
+    if progress_tracker:
+        # Cargar audio
+        audio = whisper.load_audio(audio_path)
+        audio = whisper.pad_or_trim(audio)
         
-        # Redirigir ambos a progress_capture
-        sys.stdout = progress_capture
-        sys.stderr = progress_capture
+        # Detectar idioma si es necesario
+        mel = whisper.log_mel_spectrogram(audio).to(model.device)
         
-        try:
-            resultado = model.transcribe(audio_path, **transcribe_kwargs)
-            # Restaurar streams
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            return resultado
-        except Exception as e:
-            # Asegurar restauración en caso de error
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            raise e
+        if language is None or language == 'auto':
+            _, probs = model.detect_language(mel)
+            detected_lang = max(probs, key=probs.get)
+            transcribe_kwargs['language'] = detected_lang
+        
+        # Transcribir con progreso
+        result = model.transcribe(audio_path, **transcribe_kwargs)
+        
+        # Actualizar progreso al final
+        if 'segments' in result:
+            progress_tracker.update(result['segments'])
+        
+        return result
     else:
+        # Transcripción simple sin seguimiento
         return model.transcribe(audio_path, **transcribe_kwargs)
 
