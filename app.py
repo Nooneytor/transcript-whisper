@@ -127,6 +127,10 @@ with col1:
                 progress_bar.progress(30)
                 status_text.info('🎵 Paso 2/3: Transcribiendo audio...')
                 
+                # Contenedor fijo para logs de Whisper
+                st.markdown('##### 📋 Logs de Whisper')
+                logs_container = st.empty()
+                
                 # Configurar transcripción en background
                 resultado_container = {'resultado': None, 'error': None, 'completado': False}
                 
@@ -178,6 +182,12 @@ with col1:
                             f'⏱️ Tiempo transcurrido: {minutos_trans}:{segundos_trans:02d} | '
                             f'Restante: ~{minutos_rest}:{segundos_rest:02d}'
                         )
+                        
+                        # Mostrar los últimos logs de Whisper (últimos 8)
+                        if progress_tracker.buffer:
+                            recent_logs = progress_tracker.buffer[-8:]
+                            logs_text = '\n'.join(recent_logs)
+                            logs_container.code(logs_text, language=None)
                     else:
                         # Aún no hay progreso real, solo mostrar tiempo transcurrido
                         minutos_trans = int(tiempo_transcurrido // 60)
@@ -187,6 +197,11 @@ with col1:
                         status_detail.info(
                             f'⏱️ Iniciando transcripción... Tiempo transcurrido: {minutos_trans}:{segundos_trans:02d}'
                         )
+                        
+                        # Mostrar logs iniciales si hay
+                        if progress_tracker and progress_tracker.buffer:
+                            logs_text = '\n'.join(progress_tracker.buffer[-5:])
+                            logs_container.code(logs_text, language=None)
                     
                     time.sleep(1)  # Actualizar cada segundo
                 
