@@ -43,12 +43,13 @@ modelo_real, idioma, modelo_disabled = render_sidebar(st.session_state.procesand
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.header('📁 Subir Archivo de Audio')
     archivo = render_file_uploader(st.session_state.procesando)
     
     if archivo:
+        render_file_info(archivo)
+        
+        # Calcular tamaño para validaciones posteriores
         tamano_mb = archivo.size / (1024 * 1024)
-        render_file_info(tamano_mb, modelo_real)
         
         iniciar_transcripcion = st.button(
             '🚀 Transcribir Audio',
