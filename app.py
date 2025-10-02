@@ -102,9 +102,13 @@ with col1:
                 # Contenedores de progreso
                 progress_bar = st.progress(0)
                 status_text = st.empty()
+                
+                # Contenedor de logs fijo (no empty)
+                st.markdown('##### 📋 Logs de Whisper')
+                whisper_logs_placeholder = st.empty()
+                
                 transcription_progress = st.empty()
                 detail_progress = st.empty()
-                whisper_logs_container = st.empty()
                 
                 # Paso 1: Cargar modelo
                 status_text.info('🔄 Paso 1/3: Cargando modelo Whisper...')
@@ -172,15 +176,18 @@ with col1:
                             logs_whisper.append(progress_capture.ultimo_log)
                             if len(logs_whisper) > 10:
                                 logs_whisper.pop(0)
-                            
-                            with whisper_logs_container.container():
-                                st.markdown('##### 📋 Logs de Whisper')
-                                logs_text = '\n'.join([f'• {log}' for log in logs_whisper[-5:]])
-                                st.code(logs_text, language=None)
+                        
+                        # Mostrar logs siempre
+                        if logs_whisper:
+                            logs_text = '\n'.join([f'• {log}' for log in logs_whisper[-5:]])
+                            whisper_logs_placeholder.code(logs_text, language=None)
+                        else:
+                            whisper_logs_placeholder.code('• Esperando logs de Whisper...', language=None)
                     else:
                         # Inicializando
                         progress_bar.progress(30)
                         transcription_progress.info('🎵 Inicializando...')
+                        whisper_logs_placeholder.code('• Inicializando Whisper...', language=None)
                     
                     time.sleep(0.5)
                 
@@ -190,7 +197,7 @@ with col1:
                 # Limpiar UI de progreso
                 transcription_progress.empty()
                 detail_progress.empty()
-                whisper_logs_container.empty()
+                whisper_logs_placeholder.empty()
                 
                 # Verificar errores
                 if resultado_container['error']:
