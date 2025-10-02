@@ -130,8 +130,16 @@ def load_whisper_model(model_name):
 st.title('🎙️ Transcriptor de Audio con Whisper')
 st.markdown('---')
 
+# Inicializar estado de procesamiento
+if 'procesando' not in st.session_state:
+    st.session_state.procesando = False
+
 # Sidebar con opciones
 st.sidebar.header('⚙️ Configuración')
+
+# Mostrar advertencia si está procesando
+if st.session_state.procesando:
+    st.sidebar.warning('⚠️ Transcripción en proceso... Por favor espera.')
 
 # Selector de modelo
 modelo_options = ['tiny', 'base', '🚫 small (no disponible en CPU gratuita)']
@@ -139,7 +147,8 @@ modelo = st.sidebar.selectbox(
     '🤖 Modelo de Whisper',
     modelo_options,
     index=1,
-    help='Modelos más grandes = mejor precisión pero más lento'
+    help='Modelos más grandes = mejor precisión pero más lento',
+    disabled=st.session_state.procesando
 )
 
 # Convertir la selección a nombre real del modelo
@@ -156,7 +165,8 @@ idioma = st.sidebar.selectbox(
     '🌍 Idioma',
     ['auto', 'es', 'en', 'fr', 'pt', 'it', 'de'],
     index=1,
-    help='Dejar en "auto" para detección automática'
+    help='Dejar en "auto" para detección automática',
+    disabled=st.session_state.procesando
 )
 
 # Información sobre modelos
@@ -188,7 +198,8 @@ with col1:
     archivo = st.file_uploader(
         'Selecciona un archivo de audio',
         type=['mp3', 'wav', 'm4a', 'flac', 'ogg', 'mp4', 'webm', 'mkv'],
-        help='Recomendado: < 50MB para mejor rendimiento en CPU. Máximo: 200MB'
+        help='Recomendado: < 50MB para mejor rendimiento en CPU. Máximo: 200MB',
+        disabled=st.session_state.procesando
     )
     
     if archivo:
@@ -206,7 +217,7 @@ with col1:
         # Botón de transcripción
         col_btn1, col_btn2 = st.columns([3, 1])
         with col_btn1:
-            iniciar_transcripcion = st.button('🚀 Transcribir Audio', type='primary', use_container_width=True, disabled=modelo_disabled)
+            iniciar_transcripcion = st.button('🚀 Transcribir Audio', type='primary', use_container_width=True, disabled=modelo_disabled or st.session_state.procesando)
         
         if iniciar_transcripcion:
             if archivo.size > 200 * 1024 * 1024:  # 200MB
@@ -217,6 +228,9 @@ with col1:
             elif modelo_disabled:
                 st.error('❌ El modelo seleccionado no está disponible. Por favor, elige "tiny" o "base".')
             else:
+                # Activar estado de procesamiento
+                st.session_state.procesando = True
+                
                 # Crear archivo temporal
                 with tempfile.NamedTemporaryFile(delete=False, suffix=f'_{archivo.name}') as tmp:
                     tmp.write(archivo.read())
@@ -229,14 +243,9 @@ with col1:
                     
                     progress_bar = st.progress(0)
                     status_text = st.empty()
-                    log_container = st.expander('📋 Ver logs detallados', expanded=True)
                     
-                    import datetime
-                    
-                    def log_message(message, emoji='ℹ️'):
-                        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
-                        with log_container:
-                            st.text(f"{emoji} [{timestamp}] {message}")
+                    # Contenedor simple para logs de Whisper
+                    whisper_logs_container = st.empty()
                     
                     # Calcular tiempo estimado
                     duracion_estimada_min = {
@@ -248,30 +257,21 @@ with col1:
                     # Advertencia sobre cancelación
                     st.warning('⚠️ **Importante**: Una vez iniciado, el proceso no se puede cancelar. Si necesitas detenerlo, recarga la página (perderás el progreso).')
                     
-                    log_message(f'Iniciando transcripción con modelo "{modelo_real}"', '🚀')
-                    log_message(f'Tamaño del archivo: {tamano_mb:.1f} MB', '📏')
-                    log_message(f'Tiempo estimado: {tiempo_est:.1f} minutos', '⏱️')
-                    log_message('Por favor, mantén esta ventana abierta...', '⚠️')
+                    # Info inicial
+                    st.info(f'📊 **Modelo**: {modelo_real} | **Tamaño**: {tamano_mb:.1f} MB | **Tiempo estimado**: ~{tiempo_est:.1f} min')
                     
                     # Cargar modelo (cacheado)
                     status_text.info('🔄 Paso 1/3: Cargando modelo Whisper...')
                     progress_bar.progress(10)
-                    log_message('Cargando modelo desde caché...', '🔄')
                     
                     tiempo_inicio = time.time()
                     model = load_whisper_model(modelo_real)
                     if model is None:
-                        log_message('Error al cargar el modelo', '❌')
                         st.error('❌ No se pudo cargar el modelo.')
                         st.stop()
                     
-                    tiempo_carga = time.time() - tiempo_inicio
-                    log_message(f'Modelo cargado correctamente ({tiempo_carga:.1f}s)', '✅')
-                    
                     progress_bar.progress(30)
                     status_text.info('🎵 Paso 2/3: Transcribiendo audio... (Esto puede tardar varios minutos)')
-                    log_message('Procesando audio con Whisper...', '🎵')
-                    log_message('Detectando idioma y segmentando...', '🔍')
                     
                     # Configurar parámetros de transcripción optimizados para CPU
                     # Capturar el progreso de Whisper
@@ -303,9 +303,6 @@ with col1:
                     }
                     if idioma != 'auto':
                         transcribe_kwargs['language'] = idioma
-                        log_message(f'Idioma configurado: {idioma}', '🌍')
-                    else:
-                        log_message('Detección automática de idioma activada', '🌍')
                     
                     # Transcribir con captura de progreso real
                     tiempo_transcripcion_inicio = time.time()
@@ -336,18 +333,19 @@ with col1:
                             resultado_container['completado'] = True
                     
                     # Iniciar transcripción en background
-                    log_message('Iniciando transcripción en segundo plano...', '⚙️')
                     thread = threading.Thread(target=transcribe_thread)
                     thread.start()
                     
                     # Actualizar progreso basado en logs reales de Whisper
                     progreso_anterior = 0
+                    logs_whisper_texto = []
                     
                     while not resultado_container['completado']:
                         tiempo_transcurrido = time.time() - tiempo_transcripcion_inicio
                         
                         # Obtener porcentaje real de Whisper
                         porcentaje_whisper = progreso_info['porcentaje']
+                        ultimo_log = progreso_info['ultimo_log']
                         
                         if porcentaje_whisper > 0:
                             # Usar el progreso real de Whisper (mapear de 0-100% a 40-90%)
@@ -366,10 +364,18 @@ with col1:
                             else:
                                 detail_progress.info(f'⏱️ Tiempo transcurrido: {int(tiempo_transcurrido)}s | Calculando tiempo restante...')
                             
-                            # Log del progreso
-                            if porcentaje_whisper != progreso_anterior and porcentaje_whisper % 10 == 0:
-                                log_message(f'Progreso: {porcentaje_whisper}%', '📊')
-                                progreso_anterior = porcentaje_whisper
+                            # Actualizar logs de Whisper en la cajita
+                            if ultimo_log and (not logs_whisper_texto or logs_whisper_texto[-1] != ultimo_log):
+                                logs_whisper_texto.append(ultimo_log)
+                                # Mantener solo los últimos 10 logs para no sobrecargar
+                                if len(logs_whisper_texto) > 10:
+                                    logs_whisper_texto.pop(0)
+                                
+                                # Mostrar logs en cajita
+                                with whisper_logs_container.container():
+                                    st.markdown('##### 📋 Logs de Whisper')
+                                    logs_text = '\n'.join([f'• {log}' for log in logs_whisper_texto[-5:]])  # Últimos 5
+                                    st.code(logs_text, language=None)
                         else:
                             # Si aún no hay progreso, mostrar mensaje de inicio
                             progreso_estimado = min(90, 40 + int(tiempo_transcurrido * 2))
@@ -385,26 +391,28 @@ with col1:
                     # Limpiar mensajes de progreso
                     transcription_progress.empty()
                     detail_progress.empty()
+                    whisper_logs_container.empty()
                     
                     # Verificar errores
                     if resultado_container['error']:
-                        log_message(f'Error durante transcripción: {resultado_container["error"]}', '❌')
+                        st.session_state.procesando = False  # Desactivar estado
                         st.error(f'❌ Error durante la transcripción: {resultado_container["error"]}')
                         st.stop()
                     
                     resultado = resultado_container['resultado']
                     tiempo_transcripcion = time.time() - tiempo_transcripcion_inicio
                     progress_bar.progress(90)
-                    log_message(f'Transcripción completada ({tiempo_transcripcion:.1f}s = {tiempo_transcripcion/60:.1f} min)', '✅')
                     
                     status_text.info('📝 Paso 3/3: Generando resultados...')
-                    log_message('Generando archivos de descarga...', '📝')
                     
                     progress_bar.progress(100)
                     status_text.success('✅ ¡Transcripción completada exitosamente!')
                     
                     tiempo_total = time.time() - tiempo_inicio
-                    log_message(f'Proceso completado en {tiempo_total:.1f}s ({tiempo_total/60:.1f} min)', '🎉')
+                    st.success(f'🎉 Proceso completado en {tiempo_total/60:.1f} minutos')
+                    
+                    # Desactivar estado de procesamiento
+                    st.session_state.procesando = False
                     
                     # Mostrar resultados
                     st.success('🎉 ¡Transcripción completada exitosamente!')
@@ -471,6 +479,7 @@ with col1:
                         )
                     
                 except Exception as e:
+                    st.session_state.procesando = False  # Desactivar estado en caso de error
                     st.error(f'❌ Error durante la transcripción: {str(e)}')
                     st.info('💡 Sugerencias: Verifica que el archivo no esté corrupto y que sea un formato de audio válido.')
                 
@@ -480,6 +489,8 @@ with col1:
                         os.unlink(ruta_temp)
                     except:
                         pass
+                    # Asegurar que el estado se desactiva siempre
+                    st.session_state.procesando = False
 
 with col2:
     st.header('ℹ️ Información')
