@@ -132,12 +132,22 @@ st.markdown('---')
 st.sidebar.header('⚙️ Configuración')
 
 # Selector de modelo
+modelo_options = ['tiny', 'base', '🚫 small (no disponible en CPU gratuita)']
 modelo = st.sidebar.selectbox(
     '🤖 Modelo de Whisper',
-    ['tiny', 'base', 'small'],
+    modelo_options,
     index=1,
     help='Modelos más grandes = mejor precisión pero más lento'
 )
+
+# Convertir la selección a nombre real del modelo
+if modelo.startswith('🚫'):
+    st.sidebar.error('⚠️ El modelo "small" requiere demasiados recursos y no funciona bien en CPU gratuita. Por favor, selecciona "tiny" o "base".')
+    modelo_real = 'base'  # Fallback
+    modelo_disabled = True
+else:
+    modelo_real = modelo
+    modelo_disabled = False
 
 # Selector de idioma
 idioma = st.sidebar.selectbox(
@@ -152,18 +162,18 @@ st.sidebar.markdown('### 📊 Información de Modelos')
 model_info = {
     'tiny': '~39 MB - Muy rápido, precisión básica',
     'base': '~74 MB - Equilibrio velocidad/precisión (recomendado)',
-    'small': '~244 MB - Mejor precisión, más lento'
 }
-st.sidebar.info(f"**{modelo}**: {model_info[modelo]}")
+if modelo_real in model_info:
+    st.sidebar.info(f"**{modelo_real}**: {model_info[modelo_real]}")
 
 # Advertencia de rendimiento en CPU
 st.sidebar.markdown('### ⚡ Rendimiento en CPU')
 tiempo_estimado = {
     'tiny': '3-8 min',
     'base': '10-25 min',
-    'small': '20-40 min'
 }
-st.sidebar.warning(f"⏱️ Tiempo estimado para audio de 200MB: **{tiempo_estimado[modelo]}**")
+if modelo_real in tiempo_estimado:
+    st.sidebar.warning(f"⏱️ Tiempo estimado para audio de 200MB: **{tiempo_estimado[modelo_real]}**")
 st.sidebar.info("💡 **Consejo**: Usa archivos más pequeños o modelo 'tiny' para pruebas rápidas.")
 
 # Área principal
@@ -192,12 +202,18 @@ with col1:
             st.info(f'📏 Tamaño: {tamano_mb:.1f} MB - Tamaño óptimo para CPU')
         
         # Botón de transcripción
-        if st.button('🚀 Transcribir Audio', type='primary', use_container_width=True):
+        col_btn1, col_btn2 = st.columns([3, 1])
+        with col_btn1:
+            iniciar_transcripcion = st.button('🚀 Transcribir Audio', type='primary', use_container_width=True, disabled=modelo_disabled)
+        
+        if iniciar_transcripcion:
             if archivo.size > 200 * 1024 * 1024:  # 200MB
                 st.error('❌ El archivo es demasiado grande. Máximo 200MB.')
             elif not ffmpeg_available:
                 st.error('❌ FFmpeg no está disponible. No se puede procesar el audio.')
                 st.info('💡 Intenta recargar la página o contacta al administrador.')
+            elif modelo_disabled:
+                st.error('❌ El modelo seleccionado no está disponible. Por favor, elige "tiny" o "base".')
             else:
                 # Crear archivo temporal
                 with tempfile.NamedTemporaryFile(delete=False, suffix=f'_{archivo.name}') as tmp:
@@ -205,21 +221,55 @@ with col1:
                     ruta_temp = tmp.name
                 
                 try:
-                    # Mostrar progreso
+                    # Contenedores para progreso y logs
+                    st.markdown('---')
+                    st.subheader('🔄 Proceso de Transcripción')
+                    
                     progress_bar = st.progress(0)
                     status_text = st.empty()
+                    log_container = st.expander('📋 Ver logs detallados', expanded=True)
+                    
+                    import datetime
+                    
+                    def log_message(message, emoji='ℹ️'):
+                        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+                        with log_container:
+                            st.text(f"{emoji} [{timestamp}] {message}")
+                    
+                    # Calcular tiempo estimado
+                    duracion_estimada_min = {
+                        'tiny': tamano_mb * 0.5,  # ~30 seg por MB
+                        'base': tamano_mb * 1.2,  # ~1.2 min por MB
+                    }
+                    tiempo_est = duracion_estimada_min.get(modelo_real, tamano_mb * 1.0)
+                    
+                    # Advertencia sobre cancelación
+                    st.warning('⚠️ **Importante**: Una vez iniciado, el proceso no se puede cancelar. Si necesitas detenerlo, recarga la página (perderás el progreso).')
+                    
+                    log_message(f'Iniciando transcripción con modelo "{modelo_real}"', '🚀')
+                    log_message(f'Tamaño del archivo: {tamano_mb:.1f} MB', '📏')
+                    log_message(f'Tiempo estimado: {tiempo_est:.1f} minutos', '⏱️')
+                    log_message('Por favor, mantén esta ventana abierta...', '⚠️')
                     
                     # Cargar modelo (cacheado)
-                    status_text.text('🔄 Cargando modelo Whisper...')
+                    status_text.info('🔄 Paso 1/3: Cargando modelo Whisper...')
                     progress_bar.progress(10)
+                    log_message('Cargando modelo desde caché...', '🔄')
                     
-                    model = load_whisper_model(modelo)
+                    tiempo_inicio = time.time()
+                    model = load_whisper_model(modelo_real)
                     if model is None:
+                        log_message('Error al cargar el modelo', '❌')
                         st.error('❌ No se pudo cargar el modelo.')
                         st.stop()
                     
+                    tiempo_carga = time.time() - tiempo_inicio
+                    log_message(f'Modelo cargado correctamente ({tiempo_carga:.1f}s)', '✅')
+                    
                     progress_bar.progress(30)
-                    status_text.text('🎵 Transcribiendo audio... Esto puede tardar varios minutos en CPU.')
+                    status_text.info('🎵 Paso 2/3: Transcribiendo audio... (Esto puede tardar varios minutos)')
+                    log_message('Procesando audio con Whisper...', '🎵')
+                    log_message('Detectando idioma y segmentando...', '🔍')
                     
                     # Configurar parámetros de transcripción optimizados para CPU
                     transcribe_kwargs = {
@@ -228,12 +278,28 @@ with col1:
                     }
                     if idioma != 'auto':
                         transcribe_kwargs['language'] = idioma
+                        log_message(f'Idioma configurado: {idioma}', '🌍')
+                    else:
+                        log_message('Detección automática de idioma activada', '🌍')
                     
-                    # Transcribir con barra de progreso
+                    # Transcribir
+                    tiempo_transcripcion_inicio = time.time()
+                    progress_bar.progress(40)
+                    
                     resultado = model.transcribe(ruta_temp, **transcribe_kwargs)
                     
+                    tiempo_transcripcion = time.time() - tiempo_transcripcion_inicio
+                    progress_bar.progress(90)
+                    log_message(f'Transcripción completada ({tiempo_transcripcion:.1f}s = {tiempo_transcripcion/60:.1f} min)', '✅')
+                    
+                    status_text.info('📝 Paso 3/3: Generando resultados...')
+                    log_message('Generando archivos de descarga...', '📝')
+                    
                     progress_bar.progress(100)
-                    status_text.text('✅ Transcripción completada!')
+                    status_text.success('✅ ¡Transcripción completada exitosamente!')
+                    
+                    tiempo_total = time.time() - tiempo_inicio
+                    log_message(f'Proceso completado en {tiempo_total:.1f}s ({tiempo_total/60:.1f} min)', '🎉')
                     
                     # Mostrar resultados
                     st.success('🎉 ¡Transcripción completada exitosamente!')
