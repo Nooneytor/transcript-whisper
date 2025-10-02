@@ -44,37 +44,6 @@ def setup_ffmpeg():
     return False
 
 
-def calcular_tiempo_estimado(duracion_audio_segundos, modelo, config):
-    """
-    Calcula el tiempo estimado de transcripción basándose en la duración del audio.
-    
-    Args:
-        duracion_audio_segundos: Duración del audio en segundos
-        modelo: Nombre del modelo ('tiny', 'base', 'small')
-        config: Diccionario de configuración de modelos
-    
-    Returns:
-        float: Tiempo estimado en minutos
-    """
-    if duracion_audio_segundos is None:
-        # Fallback: asumir 10 minutos si no se puede obtener duración
-        return 10.0
-    
-    # Convertir a minutos
-    duracion_minutos = duracion_audio_segundos / 60
-    
-    # Obtener factor de velocidad del modelo
-    if modelo in config and 'factor_velocidad' in config[modelo]:
-        factor = config[modelo]['factor_velocidad']
-    else:
-        factor = 1.5  # Factor por defecto
-    
-    # Tiempo estimado = duración del audio × factor del modelo
-    tiempo_estimado = duracion_minutos * factor
-    
-    return max(1.0, tiempo_estimado)  # Mínimo 1 minuto
-
-
 def get_audio_duration(audio_path):
     """
     Obtiene la duración de un archivo de audio en segundos usando FFprobe.

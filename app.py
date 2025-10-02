@@ -12,7 +12,7 @@ import threading
 
 # Importar módulos propios
 from src.config import APP_TITLE, APP_ICON, MAX_FILE_SIZE_MB, MODELOS_DISPONIBLES
-from src.utils import format_time, setup_ffmpeg, calcular_tiempo_estimado, get_audio_duration
+from src.utils import format_time, setup_ffmpeg, get_audio_duration
 from src.export import export_txt, export_docx
 from src.transcription import load_whisper_model, transcribe_audio, ProgressTracker
 from src.ui_components import render_sidebar, render_file_uploader, render_file_info, render_info_panel
@@ -109,25 +109,19 @@ with col1:
                     duracion_min = int(duracion_audio // 60)
                     duracion_seg = int(duracion_audio % 60)
                     
-                    # Calcular tiempo estimado basado en duración del audio
-                    tiempo_est = calcular_tiempo_estimado(duracion_audio, modelo_real, MODELOS_DISPONIBLES)
-                    
                     # Mostrar información
                     st.warning('⚠️ **Importante**: No cierres esta ventana ni recargues la página.')
                     st.info(
-                        f'📊 **Audio**: {duracion_min}:{duracion_seg:02d} | '
+                        f'📊 **Duración del audio**: {duracion_min}:{duracion_seg:02d} | '
                         f'**Modelo**: {modelo_real} | '
-                        f'**Tamaño**: {tamano_mb:.1f} MB\n\n'
-                        f'⏱️ **Tiempo estimado**: ~{tiempo_est:.1f} min'
+                        f'**Tamaño**: {tamano_mb:.1f} MB'
                     )
                     
                     # Crear tracker de progreso
                     progress_tracker = ProgressTracker(duracion_audio)
                 else:
-                    # Fallback si no se puede obtener duración
-                    tiempo_est = calcular_tiempo_estimado(None, modelo_real, MODELOS_DISPONIBLES)
                     st.warning('⚠️ **Importante**: No cierres esta ventana ni recargues la página.')
-                    st.info(f'📊 **Modelo**: {modelo_real} | **Tamaño**: {tamano_mb:.1f} MB | **Tiempo estimado**: ~{tiempo_est:.1f} min')
+                    st.info(f'📊 **Modelo**: {modelo_real} | **Tamaño**: {tamano_mb:.1f} MB')
                     progress_tracker = None
                 
                 progress_bar.progress(30)
@@ -152,55 +146,46 @@ with col1:
                 
                 # Actualizar progreso en tiempo real
                 tiempo_transcripcion_inicio = time.time()
-                tiempo_estimado_segundos = tiempo_est * 60
                 
                 while not resultado_container['completado']:
                     tiempo_transcurrido = time.time() - tiempo_transcripcion_inicio
                     
-                    # Usar progreso real si está disponible, sino usar estimado
+                    # Usar progreso real si está disponible
                     if progress_tracker and progress_tracker.porcentaje > 0:
                         progreso_porcentaje = progress_tracker.porcentaje
                         progreso_barra = 30 + int(progreso_porcentaje * 0.6)
                         progress_bar.progress(min(progreso_barra, 90))
                         
-                        # Calcular tiempo restante basado en progreso real
+                        # Calcular tiempo restante basado en velocidad real
                         if progreso_porcentaje > 5:
                             tiempo_por_porcentaje = tiempo_transcurrido / progreso_porcentaje
                             tiempo_restante_est = tiempo_por_porcentaje * (100 - progreso_porcentaje)
                         else:
-                            tiempo_restante_est = tiempo_estimado_segundos
+                            tiempo_restante_est = 0
                         
                         minutos_trans = int(tiempo_transcurrido // 60)
                         segundos_trans = int(tiempo_transcurrido % 60)
                         minutos_rest = int(tiempo_restante_est // 60)
                         segundos_rest = int(tiempo_restante_est % 60)
                         
-                        # Mostrar timestamp procesado
-                        timestamp_procesado = int(progress_tracker.ultimo_timestamp)
-                        min_proc = int(timestamp_procesado // 60)
-                        seg_proc = int(timestamp_procesado % 60)
+                        # Formatear duración total
+                        duracion_min = int(duracion_audio // 60)
+                        duracion_seg = int(duracion_audio % 60)
                         
                         status_detail.success(
-                            f'🎵 Progreso: **{progreso_porcentaje}%** | '
-                            f'Procesado: {min_proc}:{seg_proc:02d} / {duracion_min}:{duracion_seg:02d}\n\n'
-                            f'⏱️ Tiempo: {minutos_trans}:{segundos_trans:02d} | '
+                            f'🎵 **Progreso: {progreso_porcentaje}%** | '
+                            f'Procesado: {progress_tracker.tiempo_procesado_formateado} / {duracion_min}:{duracion_seg:02d}\n\n'
+                            f'⏱️ Tiempo transcurrido: {minutos_trans}:{segundos_trans:02d} | '
                             f'Restante: ~{minutos_rest}:{segundos_rest:02d}'
                         )
                     else:
-                        # Progreso estimado basado en tiempo
-                        progreso_porcentaje = min(95, int((tiempo_transcurrido / tiempo_estimado_segundos) * 100))
-                        progreso_barra = 30 + int(progreso_porcentaje * 0.6)
-                        progress_bar.progress(min(progreso_barra, 90))
-                        
-                        tiempo_restante = max(0, tiempo_estimado_segundos - tiempo_transcurrido)
+                        # Aún no hay progreso real, solo mostrar tiempo transcurrido
                         minutos_trans = int(tiempo_transcurrido // 60)
                         segundos_trans = int(tiempo_transcurrido % 60)
-                        minutos_rest = int(tiempo_restante // 60)
-                        segundos_rest = int(tiempo_restante % 60)
                         
+                        progress_bar.progress(35)
                         status_detail.info(
-                            f'⏱️ Transcurrido: {minutos_trans}:{segundos_trans:02d} | '
-                            f'Estimado restante: ~{minutos_rest}:{segundos_rest:02d}'
+                            f'⏱️ Iniciando transcripción... Tiempo transcurrido: {minutos_trans}:{segundos_trans:02d}'
                         )
                     
                     time.sleep(1)  # Actualizar cada segundo

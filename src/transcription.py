@@ -3,26 +3,54 @@ Funciones para la transcripción de audio con Whisper.
 """
 import whisper
 import streamlit as st
+import sys
+import re
+import io
 
 
 class ProgressTracker:
-    """Rastrea el progreso de la transcripción basándose en timestamps"""
+    """Rastrea el progreso de la transcripción en tiempo real capturando logs de Whisper"""
     def __init__(self, duracion_total):
         self.duracion_total = duracion_total
         self.ultimo_timestamp = 0
         self.porcentaje = 0
+        self.tiempo_procesado_formateado = "0:00"
+        self.buffer = []
     
-    def update(self, segments):
-        """Actualiza el progreso basándose en los segmentos procesados"""
-        if segments and len(segments) > 0:
-            # Obtener el último segmento procesado
-            ultimo_segmento = segments[-1]
-            # El timestamp 'end' indica hasta dónde se ha procesado
-            self.ultimo_timestamp = ultimo_segmento.get('end', 0)
+    def write(self, text):
+        """Captura salida de stderr/stdout de Whisper"""
+        if text.strip():
+            self.buffer.append(text)
             
-            # Calcular porcentaje
-            if self.duracion_total > 0:
-                self.porcentaje = min(100, int((self.ultimo_timestamp / self.duracion_total) * 100))
+            # Buscar porcentajes en el formato de Whisper: "XX%"
+            match_percent = re.search(r'(\d+)%', text)
+            if match_percent:
+                self.porcentaje = int(match_percent.group(1))
+                
+                # Si tenemos duración total, calcular timestamp procesado
+                if self.duracion_total > 0:
+                    timestamp_segundos = (self.porcentaje / 100) * self.duracion_total
+                    self.ultimo_timestamp = timestamp_segundos
+                    minutos = int(timestamp_segundos // 60)
+                    segundos = int(timestamp_segundos % 60)
+                    self.tiempo_procesado_formateado = f"{minutos}:{segundos:02d}"
+    
+    def flush(self):
+        """Requerido por la interfaz de streams"""
+        pass
+    
+    def update_from_timestamp(self, timestamp_segundos):
+        """Actualiza el progreso basándose en el timestamp procesado"""
+        self.ultimo_timestamp = timestamp_segundos
+        
+        # Calcular porcentaje
+        if self.duracion_total > 0:
+            self.porcentaje = min(100, int((timestamp_segundos / self.duracion_total) * 100))
+        
+        # Formatear tiempo procesado
+        minutos = int(timestamp_segundos // 60)
+        segundos = int(timestamp_segundos % 60)
+        self.tiempo_procesado_formateado = f"{minutos}:{segundos:02d}"
 
 
 @st.cache_resource
@@ -50,34 +78,32 @@ def transcribe_audio(model, audio_path, language=None, progress_tracker=None):
     """
     transcribe_kwargs = {
         'fp16': False,  # Forzar FP32 en CPU
-        'verbose': False,  # Desactivar verbose
+        'verbose': True,  # ACTIVAR para capturar porcentajes
     }
     
     if language and language != 'auto':
         transcribe_kwargs['language'] = language
     
-    # Si hay progress_tracker, hacemos transcripción iterativa
+    # Si hay progress_tracker, redirigir stderr para capturar progreso
     if progress_tracker:
-        # Cargar audio
-        audio = whisper.load_audio(audio_path)
-        audio = whisper.pad_or_trim(audio)
+        # Guardar stderr original
+        old_stderr = sys.stderr
         
-        # Detectar idioma si es necesario
-        mel = whisper.log_mel_spectrogram(audio).to(model.device)
-        
-        if language is None or language == 'auto':
-            _, probs = model.detect_language(mel)
-            detected_lang = max(probs, key=probs.get)
-            transcribe_kwargs['language'] = detected_lang
-        
-        # Transcribir con progreso
-        result = model.transcribe(audio_path, **transcribe_kwargs)
-        
-        # Actualizar progreso al final
-        if 'segments' in result:
-            progress_tracker.update(result['segments'])
-        
-        return result
+        try:
+            # Redirigir stderr al progress_tracker
+            sys.stderr = progress_tracker
+            
+            # Transcribir (los logs de progreso irán a progress_tracker)
+            result = model.transcribe(audio_path, **transcribe_kwargs)
+            
+            # Restaurar stderr
+            sys.stderr = old_stderr
+            
+            return result
+        except Exception as e:
+            # Asegurar que stderr se restaura incluso si hay error
+            sys.stderr = old_stderr
+            raise e
     else:
         # Transcripción simple sin seguimiento
         return model.transcribe(audio_path, **transcribe_kwargs)
